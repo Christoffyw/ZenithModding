@@ -12,15 +12,22 @@ using Octokit;
 
 namespace ZenithModding
 {
-    public class ZenithCore
+    public class CoreMod
     {
         public string name;
         public string version;
     }
 
+    public class CoreModRepo
+    {
+        public string name;
+        public string owner;
+        public string repo;
+    }
+
     internal class Program
     {
-        static List<ZenithCore> items = new List<ZenithCore>();
+        static List<CoreMod> coreMods = new List<CoreMod>();
 
         [DllImport("User32.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
@@ -44,80 +51,17 @@ namespace ZenithModding
                 Console.ReadKey();
                 Process.GetCurrentProcess().Kill();
             }
+            if (!Directory.Exists(Path.Combine(Directory.GetCurrentDirectory(), "BepInEx/config")))
+            {
+                Directory.CreateDirectory(Path.Combine(Directory.GetCurrentDirectory(), "BepInEx/config"));
+            }
 
             //Load config file
             LoadJson();
             System.Threading.Thread.Sleep(100);
-            
+
             //Check core mod
-            Task t = Task.Run(async () =>
-            {
-                Console.WriteLine("Checking current core mods...");
-
-                //Check Github releases
-                GitHubClient client = new GitHubClient(new ProductHeaderValue("Christoffyw"));
-                IReadOnlyList<Release> releases = await client.Repository.Release.GetAll("Christoffyw", "ZenithCore");
-
-                Version latestGitHubVersion = new Version(releases[0].TagName);
-                Version localVersion = new Version("0.0.0");
-
-                if(items != null)
-                {
-                    if (items.Count() > 0)
-                        localVersion = new Version(items.First().version);
-                }
-
-
-                int versionComparison = localVersion.CompareTo(latestGitHubVersion);
-                if (versionComparison < 0)
-                {
-                    Console.WriteLine($"Found latest release version {latestGitHubVersion}");
-                    Console.WriteLine("Coremods outdated. Updating...");
-                    using (var web = new WebClient())
-                    {
-                        web.DownloadFile(releases[0].Assets[0].BrowserDownloadUrl, "ZenithCore.dll");
-                        if (File.Exists(Path.Combine(Directory.GetCurrentDirectory(), "BepInEx/plugins/ZenithCore.dll")))
-                        {
-                            File.Delete(Path.Combine(Directory.GetCurrentDirectory(), "BepInEx/plugins/ZenithCore.dll"));
-                        }
-                        File.Move(Path.Combine(Directory.GetCurrentDirectory(), "ZenithCore.dll"), Path.Combine(Directory.GetCurrentDirectory(), "BepInEx/plugins/ZenithCore.dll"));
-                    }
-                }
-                else if (versionComparison > 0)
-                {
-                    Console.WriteLine("Invalid coremods. Redownloading...");
-                    using (var web = new WebClient())
-                    {
-                        web.DownloadFile(releases[0].Assets[0].BrowserDownloadUrl, "ZenithCore.dll");
-                        if (File.Exists(Path.Combine(Directory.GetCurrentDirectory(), "BepInEx/plugins/ZenithCore.dll")))
-                        {
-                            File.Delete(Path.Combine(Directory.GetCurrentDirectory(), "BepInEx/plugins/ZenithCore.dll"));
-                        }
-                        File.Move(Path.Combine(Directory.GetCurrentDirectory(), "ZenithCore.dll"), Path.Combine(Directory.GetCurrentDirectory(), "BepInEx/plugins/ZenithCore.dll"));
-                    }
-                }
-                if (!File.Exists(Path.Combine(Directory.GetCurrentDirectory(), "BepInEx\\plugins\\ZenithCore.dll")))
-                {
-                    Console.WriteLine($"Found latest release version {latestGitHubVersion}");
-                    Console.WriteLine("Downloading core mods...");
-                    using (var web = new WebClient())
-                    {
-                        web.DownloadFile(releases[0].Assets[0].BrowserDownloadUrl, "ZenithCore.dll");
-                        if (File.Exists(Path.Combine(Directory.GetCurrentDirectory(), "BepInEx/plugins/ZenithCore.dll")))
-                        {
-                            File.Delete(Path.Combine(Directory.GetCurrentDirectory(), "BepInEx/plugins/ZenithCore.dll"));
-                        }
-                        File.Move(Path.Combine(Directory.GetCurrentDirectory(), "ZenithCore.dll"), Path.Combine(Directory.GetCurrentDirectory(), "BepInEx/plugins/ZenithCore.dll"));
-                    }
-                }
-
-                items = new List<ZenithCore>();
-                ZenithCore zenCore = new ZenithCore();
-                zenCore.version = latestGitHubVersion.ToString();
-                zenCore.name = "ZenithCore";
-                items.Add(zenCore);
-                WriteJson();
-            });
+            Task t = Task.Run(() => { CheckCoreMods(); return Task.CompletedTask; });
 
             t.Wait();
 
@@ -141,13 +85,10 @@ namespace ZenithModding
                     Console.WriteLine("Updating doorstop...");
                     File.Move(Path.Combine(Directory.GetCurrentDirectory(), "winhttp.dll"), Path.Combine(Directory.GetCurrentDirectory(), "winhttp_alt.dll"));
                     System.Threading.Thread.Sleep(100);
-                    Console.WriteLine("DO NOT CLOSE THIS WINDOW!");
                     IntPtr handle = Process.GetCurrentProcess().MainWindowHandle;
 
                     //ShowWindow(handle, 6); <---- Minimize window
                     myProcess.WaitForExit();
-                    Console.WriteLine("Updating doorstop...");
-                    File.Move(Path.Combine(Directory.GetCurrentDirectory(), "winhttp_alt.dll"), Path.Combine(Directory.GetCurrentDirectory(), "winhttp.dll"));
                     Process.GetCurrentProcess().Kill();
                 }
             }
@@ -167,14 +108,107 @@ namespace ZenithModding
             {
                 Console.WriteLine("Reading config...");
                 string json = r.ReadToEnd();
-                items = JsonConvert.DeserializeObject<List<ZenithCore>>(json);
+                coreMods = JsonConvert.DeserializeObject<List<CoreMod>>(json);
             }
         }
 
         static public void WriteJson()
         {
-            string json = JsonConvert.SerializeObject(items.ToArray());
+            string json = JsonConvert.SerializeObject(coreMods.ToArray());
             File.WriteAllText(Path.Combine(Directory.GetCurrentDirectory(), "BepInEx/config/core.json"), json);
+        }
+
+        static async public void CheckCoreMods()
+        {
+            Console.WriteLine("Checking current core mods...");
+
+            using (WebClient wc = new WebClient())
+            {
+                var json = wc.DownloadString("https://raw.githubusercontent.com/Christoffyw/ZenithCore/main/coremods.json");
+                List<CoreModRepo> coreModRepos = JsonConvert.DeserializeObject<List<CoreModRepo>>(json);
+
+                List<CoreMod> tempCoremods = new List<CoreMod>();
+
+                for(int i = 0; i < coreModRepos.Count; i++)
+                {
+                    CoreModRepo coreModRepo = coreModRepos[i];
+
+                    //Check Github releases
+                    GitHubClient client = new GitHubClient(new ProductHeaderValue("ZenithModding"));
+                    IReadOnlyList<Release> releases = await client.Repository.Release.GetAll(coreModRepo.owner, coreModRepo.repo);
+
+                    Version latestGitHubVersion = new Version(releases[0].TagName);
+                    Version localVersion = new Version("0.0.0");
+
+                    if (coreMods != null)
+                    {
+                        if (coreMods.Count() > 0)
+                        {
+                            foreach(CoreMod coremod in coreMods)
+                            {
+                                if(coremod.name == coreModRepo.name)
+                                {
+                                    localVersion = new Version(coremod.version);
+                                }
+                            }
+                        }
+                    }
+
+
+                    int versionComparison = localVersion.CompareTo(latestGitHubVersion);
+                    if (versionComparison < 0)
+                    {
+                        Console.WriteLine($"Found latest release version of {coreModRepo.name}: {latestGitHubVersion}");
+                        Console.WriteLine($"{coreModRepo.name} outdated. Updating...");
+                        using (var web = new WebClient())
+                        {
+                            web.DownloadFile(releases[0].Assets[0].BrowserDownloadUrl, $"{coreModRepo.name}.dll");
+                            if (File.Exists(Path.Combine(Directory.GetCurrentDirectory(), $"BepInEx/plugins/{coreModRepo.name}.dll")))
+                            {
+                                File.Delete(Path.Combine(Directory.GetCurrentDirectory(), $"BepInEx/plugins/{coreModRepo.name}.dll"));
+                            }
+                            if (!Directory.Exists(Path.Combine(Directory.GetCurrentDirectory(), "BepInEx/plugins")))
+                            {
+                                Directory.CreateDirectory(Path.Combine(Directory.GetCurrentDirectory(), "BepInEx/plugins"));
+                            }
+                            File.Move(Path.Combine(Directory.GetCurrentDirectory(), $"{coreModRepo.name}.dll"), Path.Combine(Directory.GetCurrentDirectory(), $"BepInEx/plugins/{coreModRepo.name}.dll"));
+                        }
+                    }
+                    else if (versionComparison > 0)
+                    {
+                        Console.WriteLine($"Invalid {coreModRepo.name}. Redownloading...");
+                        using (var web = new WebClient())
+                        {
+                            web.DownloadFile(releases[0].Assets[0].BrowserDownloadUrl, $"{coreModRepo.name}.dll");
+                            if (File.Exists(Path.Combine(Directory.GetCurrentDirectory(), $"BepInEx/plugins/{coreModRepo.name}.dll")))
+                            {
+                                File.Delete(Path.Combine(Directory.GetCurrentDirectory(), $"BepInEx/plugins/{coreModRepo.name}.dll"));
+                            }
+                            File.Move(Path.Combine(Directory.GetCurrentDirectory(), $"{coreModRepo.name}.dll"), Path.Combine(Directory.GetCurrentDirectory(), $"BepInEx/plugins/{coreModRepo.name}.dll"));
+                        }
+                    }
+                    if (!File.Exists(Path.Combine(Directory.GetCurrentDirectory(), $"BepInEx\\plugins\\{coreModRepo.name}.dll")))
+                    {
+                        Console.WriteLine($"Found latest release version of {coreModRepo.name}: {latestGitHubVersion}");
+                        Console.WriteLine($"Downloading {coreModRepo.name}...");
+                        using (var web = new WebClient())
+                        {
+                            web.DownloadFile(releases[0].Assets[0].BrowserDownloadUrl, $"{coreModRepo.name}.dll");
+                            if (File.Exists(Path.Combine(Directory.GetCurrentDirectory(), $"BepInEx/plugins/{coreModRepo.name}.dll")))
+                            {
+                                File.Delete(Path.Combine(Directory.GetCurrentDirectory(), $"BepInEx/plugins/{coreModRepo.name}.dll"));
+                            }
+                            File.Move(Path.Combine(Directory.GetCurrentDirectory(), $"{coreModRepo.name}.dll"), Path.Combine(Directory.GetCurrentDirectory(), $"BepInEx/plugins/{coreModRepo.name}.dll"));
+                        }
+                    }
+                    CoreMod coreMod = new CoreMod();
+                    coreMod.version = latestGitHubVersion.ToString();
+                    coreMod.name = coreModRepo.name;
+                    tempCoremods.Add(coreMod);
+                }
+                coreMods = tempCoremods;
+                WriteJson();
+            }
         }
     }
 }
